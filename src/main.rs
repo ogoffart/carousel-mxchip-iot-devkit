@@ -33,6 +33,59 @@ fn main() -> ! {
     let btn_a = gpioa.pa4.into_pull_up_input();
     let btn_b = gpioa.pa10.into_pull_up_input();
 
+
+    use embedded_graphics::prelude::*;
+    use embedded_graphics::primitives::{Circle, Line, Rect};
+    use ssd1306::prelude::*;
+
+    let rcc = dp.RCC.constrain();
+    let clocks = rcc.cfgr.freeze();
+    let i2c = stm32f4xx_hal::i2c::I2c::i2c1(dp.I2C1,
+        (gpiob.pb8.into_alternate_af4(),
+         gpiob.pb9.into_alternate_af4()),
+        stm32f4xx_hal::time::KiloHertz(400), clocks );
+
+    let mut disp: GraphicsMode<_> = ssd1306::Builder::new().connect_i2c(i2c).into();
+
+    disp.init().unwrap();
+    disp.flush().unwrap();
+
+    disp.draw(
+        Line::new(Coord::new(8, 16 + 16), Coord::new(8 + 16, 16 + 16))
+            .with_stroke(Some(1u8.into()))
+            .into_iter(),
+    );
+    disp.draw(
+        Line::new(Coord::new(8, 16 + 16), Coord::new(8 + 8, 16))
+            .with_stroke(Some(1u8.into()))
+            .into_iter(),
+    );
+    disp.draw(
+        Line::new(Coord::new(8 + 16, 16 + 16), Coord::new(8 + 8, 16))
+            .with_stroke(Some(1u8.into()))
+            .into_iter(),
+    );
+
+    disp.draw(
+        Rect::new(Coord::new(48, 16), Coord::new(48 + 16, 16 + 16))
+            .with_stroke(Some(1u8.into()))
+            .into_iter(),
+    );
+
+    disp.draw(
+        Circle::new(Coord::new(96, 16 + 8), 8)
+            .with_stroke(Some(1u8.into()))
+            .into_iter(),
+    );
+
+    disp.flush().unwrap();
+
+
+
+
+
+
+
     loop {
 
         led_b.set_high();
