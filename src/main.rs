@@ -15,6 +15,7 @@ use stm32f4xx_hal::{stm32, prelude::*};
 
 #[entry]
 fn main() -> ! {
+    cortex_m::asm::delay(10000);
 
     let dp = stm32::Peripherals::take().unwrap();
 
