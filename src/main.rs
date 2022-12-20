@@ -1,23 +1,33 @@
 #![no_std]
 #![no_main]
+#![feature(default_alloc_error_handler)]
+
+extern crate alloc;
 
 // pick a panicking behavior
 extern crate panic_halt; // you can put a breakpoint on `rust_begin_unwind` to catch panics
-// extern crate panic_abort; // requires nightly
-// extern crate panic_itm; // logs messages over ITM; requires ITM support
-// extern crate panic_semihosting; // logs messages to the host stderr; requires a debugger
+                         // extern crate panic_abort; // requires nightly
+                         // extern crate panic_itm; // logs messages over ITM; requires ITM support
+                         // extern crate panic_semihosting; // logs messages to the host stderr; requires a debugger
 
-use cortex_m::asm;
 use cortex_m_rt::entry;
 
-use stm32f4::stm32f412;
-use stm32f4xx_hal::{stm32, prelude::*};
+use embedded_graphics_core::pixelcolor::BinaryColor;
+use embedded_graphics_core::prelude::OriginDimensions;
+use slint::platform::software_renderer::PremultipliedRgbaColor;
+use slint::platform::software_renderer::TargetPixel;
+use slint::PhysicalSize;
+use stm32f4xx_hal::i2c::Mode;
+use stm32f4xx_hal::prelude::*;
+
+slint::include_modules!();
 
 #[entry]
 fn main() -> ! {
     cortex_m::asm::delay(10000);
 
-    let dp = stm32::Peripherals::take().unwrap();
+    let dp = stm32f4xx_hal::pac::Peripherals::take().unwrap();
+    let cp = stm32f4xx_hal::pac::CorePeripherals::take().unwrap();
 
     let gpiob = dp.GPIOB.split();
     let gpioc = dp.GPIOC.split();
@@ -31,6 +41,9 @@ fn main() -> ! {
     let mut led_b = gpioc.pc7.into_push_pull_output();
     let mut led_g = gpiob.pb3.into_push_pull_output();
 
+    led_b.set_high();
+    led_wifi.set_high();
+
     let btn_a = gpioa.pa4.into_pull_up_input();
     let btn_b = gpioa.pa10.into_pull_up_input();
 
@@ -38,27 +51,123 @@ fn main() -> ! {
 
     let rcc = dp.RCC.constrain();
     let clocks = rcc.cfgr.freeze();
-    let i2c = stm32f4xx_hal::i2c::I2c::i2c1(dp.I2C1,
-        (gpiob.pb8.into_alternate_af4(),
-         gpiob.pb9.into_alternate_af4()),
-        stm32f4xx_hal::time::KiloHertz(400), clocks );
+    let i2c = stm32f4xx_hal::i2c::I2c1::new(
+        dp.I2C1,
+        (gpiob.pb8, gpiob.pb9),
+        Mode::Standard {
+            frequency: stm32f4xx_hal::time::Hertz::kHz(400),
+        },
+        &clocks,
+    );
 
-    let mut disp: GraphicsMode<_> = ssd1306::Builder::new().connect_i2c(i2c).into();
+    let interface = ssd1306::I2CDisplayInterface::new(i2c);
+    let mut disp = ssd1306::Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0)
+        .into_buffered_graphics_mode();
+
     disp.init().unwrap();
     disp.flush().unwrap();
 
-    let mut snake = snake::Snake::default();
+    disp.clear();
+
+    // -------- Setup Allocator --------
+    const HEAP_SIZE: usize = 200 * 1024;
+    static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
+    #[global_allocator]
+    static ALLOCATOR: alloc_cortex_m::CortexMHeap = alloc_cortex_m::CortexMHeap::empty();
+    unsafe {
+        ALLOCATOR.init(
+            &mut HEAP as *const u8 as usize,
+            core::mem::size_of_val(&HEAP),
+        )
+    }
+
+    struct MyPlatform {
+        window: alloc::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow<1>>,
+        timer: stm32f4xx_hal::dwt::MonoTimer,
+    }
+
+    impl slint::platform::Platform for MyPlatform {
+        fn create_window_adapter(&self) -> alloc::rc::Rc<dyn slint::platform::WindowAdapter> {
+            self.window.clone()
+        }
+        fn duration_since_start(&self) -> core::time::Duration {
+            core::time::Duration::from_millis(self.timer.now().elapsed())
+        }
+    }
+
+    let window = slint::platform::software_renderer::MinimalSoftwareWindow::new();
+    let timer = stm32f4xx_hal::dwt::MonoTimer::new(cp.DWT, cp.DCB, &clocks);
+    slint::platform::set_platform(alloc::boxed::Box::new(MyPlatform {
+        window: window.clone(),
+        timer,
+    }))
+    .unwrap();
+
+    //    let mut snake = snake::Snake::default();
     let mut last_touch = false;
+
+    let ui = UI::new();
+    let s = disp.size();
+    ui.window().set_size(PhysicalSize::new(s.width, s.height));
+    ui.show();
+    let mut line = [GrayPixel(0); 320];
+
     loop {
+        led_g.set_high();
+        //led_r.set_low();
+        slint::platform::update_timers_and_animations();
+        window.draw_if_needed(|renderer| {
+            led_b.set_high();
+            led_r.set_high();
+
+            use embedded_graphics_core::prelude::*;
+            struct DisplayWrapper<'a, T>(&'a mut T, &'a mut [GrayPixel]);
+            impl<T: DrawTarget<Color = BinaryColor>>
+                slint::platform::software_renderer::LineBufferProvider for DisplayWrapper<'_, T>
+            {
+                type TargetPixel = GrayPixel;
+                fn process_line(
+                    &mut self,
+                    line: usize,
+                    range: core::ops::Range<usize>,
+                    render_fn: impl FnOnce(&mut [Self::TargetPixel]),
+                ) {
+                    let rect = embedded_graphics_core::primitives::Rectangle::new(
+                        Point::new(range.start as _, line as _),
+                        Size::new(range.len() as _, 1),
+                    );
+                    render_fn(&mut self.1[range.clone()]);
+                    self.0
+                        .fill_contiguous(
+                            &rect,
+                            self.1[range.clone()].iter().map(|src| {
+                                if src.0 > 0x88 {
+                                    BinaryColor::On
+                                } else {
+                                    BinaryColor::Off
+                                }
+                            }),
+                        )
+                        .map_err(drop)
+                        .unwrap();
+                }
+            }
+            renderer.render_by_line(DisplayWrapper(&mut disp, line.as_mut_slice()));
+            disp.flush().unwrap();
+            led_b.set_low();
+        });
+
+        led_wifi.toggle();
+
         let mut is_left = false;
         let mut is_right = false;
 
         for _ in 0..200 {
             if !last_touch {
-                is_left = is_left || !btn_a.is_high().unwrap();
-                is_right = is_right || !btn_b.is_high().unwrap();
+                is_left = is_left || !btn_a.is_high();
+                is_right = is_right || !btn_b.is_high();
             }
-            if btn_a.is_high().unwrap() && btn_b.is_high().unwrap() {
+            if btn_a.is_high() && btn_b.is_high() {
                 last_touch = false;
             } else {
                 last_touch = true;
@@ -69,126 +178,155 @@ fn main() -> ! {
             is_left = false;
             is_right = false;
         }
-        snake::advance(&mut snake, is_left, is_right);
-        disp.clear();
-        snake::draw(&snake, &mut disp, 128, 64);
-        disp.flush().unwrap();
-    };
-}
-
-
-
-
-
-mod snake {
-use embedded_graphics::Drawing;
-
-const BOARD_WIDTH : isize = 24;
-const BOARD_HEIGHT : isize = 12;
-const SNAKE_MAX : usize = 128;
-
-#[derive(Default, Eq,PartialEq, Clone, Copy)]
-struct Point(isize, isize);
-
-pub struct Snake {
-    tail: [Point; SNAKE_MAX],
-    dx: isize,
-    dy: isize,
-    len: usize,
-    offset: usize,
-    apple : Point,
-}
-
-impl Default for Snake {
-    fn default() -> Self {
-        Snake{
-            tail: [Point(0,0); SNAKE_MAX],
-            dx: 1,
-            dy: 0,
-            len: 1,
-            offset: 0,
-            apple: Point(2,3),
-        }
+        //  snake::advance(&mut snake, is_left, is_right);
+        //disp.clear();
+        // snake::draw(&snake, &mut disp, 128, 64);
+        //   disp.flush().unwrap();
     }
 }
 
-pub fn advance(snake: &mut Snake, turn_left : bool, turn_right: bool) {
-    if turn_left {
-        let ndx = snake.dy;
-        snake.dy = -snake.dx;
-        snake.dx = ndx;
-    } else if turn_right {
-        let ndx = - snake.dy;
-        snake.dy = snake.dx;
-        snake.dx = ndx;
+/*mod snake {
+    use embedded_graphics::prelude::DrawTarget;
+
+    const BOARD_WIDTH: isize = 24;
+    const BOARD_HEIGHT: isize = 12;
+    const SNAKE_MAX: usize = 128;
+
+    #[derive(Default, Eq, PartialEq, Clone, Copy)]
+    struct Point(isize, isize);
+
+    pub struct Snake {
+        tail: [Point; SNAKE_MAX],
+        dx: isize,
+        dy: isize,
+        len: usize,
+        offset: usize,
+        apple: Point,
     }
 
-    let p = snake.tail[snake.offset];
-    let mut p = Point(p.0 + snake.dx, p.1 + snake.dy);
-
-    //if p.0 < 0 || p.0 >= BOARD_WIDTH || p.1 < 0 || p.1 >= BOARD_HEIGHT {
-    //   *snake =  Snake::default();
-    //   return;
-    //}
-    p.0 = (BOARD_WIDTH + p.0) % BOARD_WIDTH;
-    p.1 = (BOARD_HEIGHT + p.1) % BOARD_HEIGHT;
-    for x in 0..snake.len {
-        if p == snake.tail[(SNAKE_MAX + snake.offset - x) % SNAKE_MAX] {
-            *snake =  Snake::default();
-            return;
+    impl Default for Snake {
+        fn default() -> Self {
+            Snake {
+                tail: [Point(0, 0); SNAKE_MAX],
+                dx: 1,
+                dy: 0,
+                len: 1,
+                offset: 0,
+                apple: Point(2, 3),
+            }
         }
     }
 
-    if p == snake.apple {
-        snake.len += 1;
-        let r = (snake.len as isize * 7 + p.0  * 13 + p.1 * 73 + snake.offset as isize * 29
-            + (snake.dy + 4) * 97 + (snake.dx + 3) * 53) * 197;
-        snake.apple = Point(r % BOARD_WIDTH, (r / BOARD_WIDTH) % BOARD_HEIGHT);
-        if snake.len >= SNAKE_MAX {
-            snake.len = SNAKE_MAX-1
+    pub fn advance(snake: &mut Snake, turn_left: bool, turn_right: bool) {
+        if turn_left {
+            let ndx = snake.dy;
+            snake.dy = -snake.dx;
+            snake.dx = ndx;
+        } else if turn_right {
+            let ndx = -snake.dy;
+            snake.dy = snake.dx;
+            snake.dx = ndx;
         }
+
+        let p = snake.tail[snake.offset];
+        let mut p = Point(p.0 + snake.dx, p.1 + snake.dy);
+
+        //if p.0 < 0 || p.0 >= BOARD_WIDTH || p.1 < 0 || p.1 >= BOARD_HEIGHT {
+        //   *snake =  Snake::default();
+        //   return;
+        //}
+        p.0 = (BOARD_WIDTH + p.0) % BOARD_WIDTH;
+        p.1 = (BOARD_HEIGHT + p.1) % BOARD_HEIGHT;
+        for x in 0..snake.len {
+            if p == snake.tail[(SNAKE_MAX + snake.offset - x) % SNAKE_MAX] {
+                *snake = Snake::default();
+                return;
+            }
+        }
+
+        if p == snake.apple {
+            snake.len += 1;
+            let r = (snake.len as isize * 7
+                + p.0 * 13
+                + p.1 * 73
+                + snake.offset as isize * 29
+                + (snake.dy + 4) * 97
+                + (snake.dx + 3) * 53)
+                * 197;
+            snake.apple = Point(r % BOARD_WIDTH, (r / BOARD_WIDTH) % BOARD_HEIGHT);
+            if snake.len >= SNAKE_MAX {
+                snake.len = SNAKE_MAX - 1
+            }
+        }
+        snake.offset += 1;
+        if snake.offset == SNAKE_MAX {
+            snake.offset = 0
+        }
+
+        snake.tail[snake.offset] = p;
     }
-    snake.offset += 1;
-    if snake.offset == SNAKE_MAX {
-        snake.offset = 0
+
+    pub fn draw<D: DrawTarget>(
+        snake: &Snake,
+        disp: &mut D,
+        screen_width: isize,
+        screen_height: isize,
+    ) {
+        use embedded_graphics::primitives::{Circle, Line, Rect};
+
+        let sqw = (screen_width / BOARD_WIDTH) as i32;
+        let sqh = (screen_height / BOARD_HEIGHT) as i32;
+
+        //disp.draw(Rect::new(Coord::new(0, 0), Coord::new(screen_width, screen_height)).with_fill(Some(0.into())) .into_iter());
+        for x in 0..snake.len {
+            let p = snake.tail[(SNAKE_MAX + snake.offset - x) % SNAKE_MAX];
+            disp.draw(
+                Rect::new(
+                    Coord::new(p.0 as i32 * sqw, p.1 as i32 * sqh),
+                    Coord::new((p.0 + 1) as i32 * sqw, (p.1 + 1) as i32 * sqh),
+                )
+                .with_fill(Some(1.into()))
+                .into_iter(),
+            );
+        }
+        disp.draw(
+            Line::new(
+                Coord::new(snake.apple.0 as i32 * sqw, snake.apple.1 as i32 * sqh),
+                Coord::new(
+                    (snake.apple.0 + 1) as i32 * sqw,
+                    (snake.apple.1 + 1) as i32 * sqh,
+                ),
+            )
+            .with_stroke(Some(2.into()))
+            .into_iter(),
+        );
+        disp.draw(
+            Line::new(
+                Coord::new((snake.apple.0 + 1) as i32 * sqw, snake.apple.1 as i32 * sqh),
+                Coord::new(snake.apple.0 as i32 * sqw, (snake.apple.1 + 1) as i32 * sqh),
+            )
+            .with_stroke(Some(2.into()))
+            .into_iter(),
+        );
+    }
+}
+*/
+
+/// A 8bit grayscale pixel
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct GrayPixel(pub u8);
+
+impl TargetPixel for GrayPixel {
+    fn blend(&mut self, color: PremultipliedRgbaColor) {
+        let a = (u8::MAX - color.alpha) as u16;
+
+        let c = (color.red as u16 + color.blue as u16 + color.green as u16) / 3;
+
+        self.0 = (((c << 8) + self.0 as u16 * a) >> 8) as u8;
     }
 
-    snake.tail[snake.offset] = p;
-}
-
-pub fn draw<C : embedded_graphics::pixelcolor::PixelColor, D : Drawing<C>>(
-    snake: &Snake, disp : &mut D, screen_width: isize, screen_height: isize) {
-
-    use embedded_graphics::prelude::*;
-    use embedded_graphics::primitives::{Circle, Line, Rect};
-
-    let sqw = (screen_width/ BOARD_WIDTH)  as i32;
-    let sqh = (screen_height/ BOARD_HEIGHT)  as i32;
-
-    //disp.draw(Rect::new(Coord::new(0, 0), Coord::new(screen_width, screen_height)).with_fill(Some(0.into())) .into_iter());
-    for x in 0..snake.len {
-        let p = snake.tail[(SNAKE_MAX + snake.offset - x) % SNAKE_MAX];
-        disp.draw(Rect::new(Coord::new(p.0 as i32 * sqw, p.1 as i32 * sqh),
-                Coord::new((p.0 +1) as i32 * sqw, (p.1 + 1) as i32 * sqh))
-            .with_fill(Some(1.into())).into_iter());
+    fn from_rgb(r: u8, g: u8, b: u8) -> Self {
+        Self(((r as u16 + g as u16 + b as u16) / 3) as u8)
     }
-    disp.draw(Line::new(Coord::new(snake.apple.0 as i32 * sqw, snake.apple.1 as i32 * sqh),
-            Coord::new((snake.apple.0 +1) as i32 * sqw, (snake.apple.1 + 1) as i32 * sqh) )
-        .with_stroke(Some(2.into())) .into_iter());
-    disp.draw(Line::new(Coord::new((snake.apple.0 + 1) as i32 * sqw, snake.apple.1 as i32 * sqh),
-            Coord::new(snake.apple.0 as i32 * sqw, (snake.apple.1 + 1) as i32 * sqh) )
-        .with_stroke(Some(2.into())) .into_iter());
 }
-
-
-}
-
-
-
-
-
-
-
-
-
-

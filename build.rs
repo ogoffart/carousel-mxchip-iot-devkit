@@ -4,6 +4,13 @@ use std::io::Write;
 use std::path::PathBuf;
 
 fn main() {
+    slint_build::compile_with_config(
+        "src/ui.slint",
+        slint_build::CompilerConfiguration::new()
+            .embed_resources(slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer),
+    )
+    .unwrap();
+
     // Put the linker script somewhere the linker can find it
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
     File::create(out.join("memory.x"))
