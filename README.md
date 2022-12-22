@@ -1,4 +1,4 @@
-Small example using Slint on  the MXCHIP IoT DevKit (AZ3166)
+Small example using [Slint](https://slint-ui.com) on  the MXCHIP IoT DevKit (AZ3166)
 
 
 To Build and run:
@@ -21,3 +21,4 @@ cargo +nightly  build --release
 gdb-multiarch -q target/thumbv7em-none-eabihf/release/carousel  -ex "target remote localhost:3333"  -ex "load" -ex "continue"
 ```
 
+https://user-images.githubusercontent.com/959326/209118829-2bddee36-00c3-4c3d-90ab-d745a7f3504c.mp4
