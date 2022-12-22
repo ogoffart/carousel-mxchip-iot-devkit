@@ -4,6 +4,7 @@ Small example using [Slint](https://slint-ui.com) on  the MXCHIP IoT DevKit (AZ3
 To Build and run:
 
 You need:
+ - The hardware: an MXCHIP IoT DevKit https://en.mxchip.com/az3166
  - Rust nightly (because `#![feature(default_alloc_error_handler)]`) with the thumbv7em-none-eabihf toolchain
  - openocd
  - GDB for arm
