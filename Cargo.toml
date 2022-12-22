@@ -1,13 +1,13 @@
 [package]
-authors = ["Olivier Goffart <ogoffart@woboq.com>"]
+authors = ["Olivier Goffart <olivier.goffart@slint-ui.com>"]
 edition = "2021"
 readme = "README.md"
-name = "embedded-snake"
+name = "carousel-mxchip-iot-devkit"
 version = "0.2.0"
 
 [dependencies]
 
-slint = { version = "0.3.0", default-features = false, features = ["compat-0-3-0", "libm", "unsafe-single-threaded"] }
+slint = { version = "0.3.3", default-features = false, features = ["compat-0-3-0", "libm", "unsafe-single-threaded"] }
 
 alloc-cortex-m = { version = "0.4.2" }
 
@@ -21,11 +21,6 @@ embedded-graphics-core = "0.3"
 
 embedded-hal = "0.2"
 
-# Uncomment for the panic example.
-# panic-itm = "0.4.1"
-
-# Uncomment for the allocator example.
-# alloc-cortex-m = "0.3.5"
 
 [dependencies.stm32f4xx-hal]
 version = "0.14"
@@ -37,13 +32,13 @@ version = "0.15"
 
 
 [build-dependencies]
-slint-build = { version = "0.3.0" }
+slint-build = { version = "0.3.3" }
 
-# this lets you use `cargo fix`!
 [[bin]]
-name = "embedded-snake"
+name = "carousel"
 test = false
 bench = false
+path = "src/main.rs"
 
 [profile.release]
 codegen-units = 1 # better optimizations
