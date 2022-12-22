@@ -14,17 +14,22 @@ use cortex_m_rt::entry;
 
 use embedded_graphics_core::pixelcolor::BinaryColor;
 use embedded_graphics_core::prelude::OriginDimensions;
+use embedded_hal::digital::v2::InputPin;
 use slint::platform::software_renderer::PremultipliedRgbaColor;
 use slint::platform::software_renderer::TargetPixel;
+use slint::platform::Key;
+use slint::platform::WindowAdapter;
+use slint::platform::WindowEvent;
 use slint::PhysicalSize;
 use stm32f4xx_hal::i2c::Mode;
 use stm32f4xx_hal::prelude::*;
+use stm32f4xx_hal::time::Hertz;
 
 slint::include_modules!();
 
 #[entry]
 fn main() -> ! {
-    cortex_m::asm::delay(10000);
+    //cortex_m::asm::delay(10000);
 
     let dp = stm32f4xx_hal::pac::Peripherals::take().unwrap();
     let cp = stm32f4xx_hal::pac::CorePeripherals::take().unwrap();
@@ -41,11 +46,11 @@ fn main() -> ! {
     let mut led_b = gpioc.pc7.into_push_pull_output();
     let mut led_g = gpiob.pb3.into_push_pull_output();
 
-    led_b.set_high();
-    led_wifi.set_high();
+    //led_b.set_high();
+    //led_wifi.set_high();
 
-    let btn_a = gpioa.pa4.into_pull_up_input();
-    let btn_b = gpioa.pa10.into_pull_up_input();
+    let mut btn_a = gpioa.pa4.into_pull_up_input();
+    let mut btn_b = gpioa.pa10.into_pull_up_input();
 
     use ssd1306::prelude::*;
 
@@ -83,7 +88,8 @@ fn main() -> ! {
 
     struct MyPlatform {
         window: alloc::rc::Rc<slint::platform::software_renderer::MinimalSoftwareWindow<1>>,
-        timer: stm32f4xx_hal::dwt::MonoTimer,
+        timer: stm32f4xx_hal::dwt::Instant,
+        freq: Hertz,
     }
 
     impl slint::platform::Platform for MyPlatform {
@@ -91,7 +97,7 @@ fn main() -> ! {
             self.window.clone()
         }
         fn duration_since_start(&self) -> core::time::Duration {
-            core::time::Duration::from_millis(self.timer.now().elapsed())
+            core::time::Duration::from_millis((self.timer.elapsed() / self.freq.to_kHz()) as u64)
         }
     }
 
@@ -99,26 +105,40 @@ fn main() -> ! {
     let timer = stm32f4xx_hal::dwt::MonoTimer::new(cp.DWT, cp.DCB, &clocks);
     slint::platform::set_platform(alloc::boxed::Box::new(MyPlatform {
         window: window.clone(),
-        timer,
+        timer: timer.now(),
+        freq: timer.frequency(),
     }))
     .unwrap();
 
     //    let mut snake = snake::Snake::default();
     let mut last_touch = false;
 
-    let ui = UI::new();
+    let ui = MainWindow::new();
     let s = disp.size();
     ui.window().set_size(PhysicalSize::new(s.width, s.height));
     ui.show();
     let mut line = [GrayPixel(0); 320];
 
+    let mut btns = [
+        (
+            &mut btn_a as &mut dyn InputPin<Error = _>,
+            Key::LeftArrow,
+            false,
+        ),
+        (
+            &mut btn_b as &mut dyn InputPin<Error = _>,
+            Key::RightArrow,
+            false,
+        ),
+    ];
+
     loop {
-        led_g.set_high();
+        //led_g.set_high();
         //led_r.set_low();
         slint::platform::update_timers_and_animations();
         window.draw_if_needed(|renderer| {
-            led_b.set_high();
-            led_r.set_high();
+            //led_b.set_high();
+            //led_r.set_high();
 
             use embedded_graphics_core::prelude::*;
             struct DisplayWrapper<'a, T>(&'a mut T, &'a mut [GrayPixel]);
@@ -159,29 +179,19 @@ fn main() -> ! {
 
         led_wifi.toggle();
 
-        let mut is_left = false;
-        let mut is_right = false;
-
-        for _ in 0..200 {
-            if !last_touch {
-                is_left = is_left || !btn_a.is_high();
-                is_right = is_right || !btn_b.is_high();
-            }
-            if btn_a.is_high() && btn_b.is_high() {
-                last_touch = false;
-            } else {
-                last_touch = true;
-            }
-            cortex_m::asm::delay(10000);
+        for (btn, key, pressed) in &mut btns {
+            let p = btn.is_high().unwrap();
+            if p && !*pressed {
+                window.window().dispatch_event(WindowEvent::KeyPressed {
+                    text: (*key).into(),
+                })
+            } else if !p && *pressed {
+                window.window().dispatch_event(WindowEvent::KeyReleased {
+                    text: (*key).into(),
+                })
+            };
+            *pressed = p;
         }
-        if is_left && is_right {
-            is_left = false;
-            is_right = false;
-        }
-        //  snake::advance(&mut snake, is_left, is_right);
-        //disp.clear();
-        // snake::draw(&snake, &mut disp, 128, 64);
-        //   disp.flush().unwrap();
     }
 }
 

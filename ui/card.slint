@@ -5,7 +5,12 @@ import { Theme } from "theme.slint";
 import { TitleLabel } from "title_label.slint";
 
 export Card := Rectangle {
-    callback clicked <=> touch-area.clicked;  
+    callback clicked <=> touch-area.clicked;
+
+    property <length> itemWidth;
+
+    width: itemWidth;
+    height: itemWidth;
 
     property <string> title: "title";
     property <bool> is-selected: false;
@@ -14,10 +19,8 @@ export Card := Rectangle {
     property <length> title-spacing: Theme.spacing-medium;
     property <length> title-area-height: Theme.size-small;
 
-    border-radius: Theme.radius-regular;
+    border-radius: width / 10;
     background: Theme.background-regular;
-    width: Theme.size-medium;
-    height: Theme.size-medium;
     clip: false;
 
     touch-area := TouchArea {}
@@ -31,30 +34,19 @@ export Card := Rectangle {
 
         animate colorize { duration: Theme.duration-fast; }
     }
-    
-    // Selection text
-    title-label := TitleLabel {
-        x: (parent.width - width) / 2;
-        y: parent.height;
-        text <=> title;
-        visible: false;
-        color: Theme.foreground;
-    }
 
     states [
         pressed-selected when touch-area.pressed && is-selected  : {
             background: Theme.background-selected-pressed;
             image.colorize: Theme.foreground-selected-pressed;
-            width: Theme.size-big;
-            height: Theme.size-big;
-            title-label.visible: true;
+            width: itemWidth * 1.2;
+            height: itemWidth * 1.2;
         }
         hover-selected when touch-area.has-hover && is-selected  : {
             background: Theme.background-selected-hover;
             image.colorize: Theme.foreground-selected-hover;
-            width: Theme.size-big;
-            height: Theme.size-big;
-            title-label.visible: true;
+            width: itemWidth * 1.2;
+            height: itemWidth * 1.2;
         }
         pressed when touch-area.pressed : {
             background: Theme.background-pressed;
@@ -68,9 +60,8 @@ export Card := Rectangle {
         selected when is-selected : {
             background: Theme.background-selected;
             image.colorize: Theme.foreground-selected;
-            width: Theme.size-big;
-            height: Theme.size-big;
-            title-label.visible: true;
+            width: itemWidth * 1.2;
+            height: itemWidth * 1.2;
         }
      ]
 
